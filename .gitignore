@@ -1,12 +1,63 @@
-# Python
+# --- Python ---
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+*.manifest
+*.spec
+
+# --- Виртуальные окружения ---
 .venv/
+venv/
+env/
+ENV/
+
+# --- Конфиги и секреты ---
 .env
+*.env
+.env.*
 
-# VS Code
+# --- Логи ---
+*.log
+logs/
+*.out
+*.err
+
+# --- Кэш и временные ---
+.cache/
+*.tmp
+*.swp
+*.bak
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb_save
+
+# --- VS Code ---
 .vscode/
+.history/
 
-# OS
+# --- Системные ---
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# --- Тесты ---
+.coverage
+.pytest_cache/
+.tox/
+.nox/
+
+# сохранить папки, но игнорировать содержимое
+data/*
+!data/.gitkeep
+!data/raw/
+!data/processed/
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
