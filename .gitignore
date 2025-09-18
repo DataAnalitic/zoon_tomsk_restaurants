@@ -16,10 +16,16 @@ venv/
 env/
 ENV/
 
-# --- Конфиги и секреты ---
+# --- VS Code: игнорируй всё, КРОМЕ этих файлов ---
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# --- .env: игнорируй реальные секреты, но оставь шаблон ---
 .env
 *.env
-.env.*
+!.env.example
 
 # --- Логи ---
 *.log
@@ -36,10 +42,6 @@ logs/
 # --- Jupyter ---
 .ipynb_checkpoints/
 *.ipynb_save
-
-# --- VS Code ---
-.vscode/
-.history/
 
 # --- Системные ---
 .DS_Store

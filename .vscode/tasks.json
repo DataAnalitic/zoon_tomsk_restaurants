@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Установить зависимости",
+      "type": "shell",
+      "command": "pip install -r requirements.txt",
+      "problemMatcher": []
+    },
+    {
+      "label": "Запустить парсер",
+      "type": "shell",
+      "command": "python zoon_tomsk_restaurants.py",
+      "problemMatcher": []
+    }
+  ]
+}

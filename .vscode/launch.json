@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Запуск zoon_tomsk_restaurants.py",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/zoon_tomsk_restaurants.py",
+      "console": "integratedTerminal"
+    }
+  ]
+}
