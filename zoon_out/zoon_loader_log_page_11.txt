@@ -1,0 +1,23 @@
+Открыта страница 1: https://zoon.ru/tomsk/restaurants/
+Стр. 1: карточек 30, добавлено 30, всего 30
+Открыта страница 2: https://zoon.ru/tomsk/restaurants/page-2/
+Стр. 2: карточек 30, добавлено 30, всего 60
+Открыта страница 3: https://zoon.ru/tomsk/restaurants/page-3/
+Стр. 3: карточек 30, добавлено 30, всего 90
+Открыта страница 4: https://zoon.ru/tomsk/restaurants/page-4/
+Стр. 4: экран проверки — ждём редирект
+Стр. 4: карточек 30, добавлено 30, всего 120
+Открыта страница 5: https://zoon.ru/tomsk/restaurants/page-5/
+Стр. 5: карточек 30, добавлено 30, всего 150
+Открыта страница 6: https://zoon.ru/tomsk/restaurants/page-6/
+Стр. 6: карточек 30, добавлено 30, всего 180
+Открыта страница 7: https://zoon.ru/tomsk/restaurants/page-7/
+Стр. 7: карточек 30, добавлено 30, всего 210
+Открыта страница 8: https://zoon.ru/tomsk/restaurants/page-8/
+Стр. 8: карточек 30, добавлено 30, всего 240
+Открыта страница 9: https://zoon.ru/tomsk/restaurants/page-9/
+Стр. 9: карточек 30, добавлено 30, всего 270
+Открыта страница 10: https://zoon.ru/tomsk/restaurants/page-10/
+Стр. 10: карточек 30, добавлено 30, всего 300
+Открыта страница 11: https://zoon.ru/tomsk/restaurants/page-11/
+Стр. 11: карточек 30, добавлено 30, всего 330

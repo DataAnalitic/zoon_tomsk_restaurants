@@ -1,0 +1,6 @@
+Открыта страница 1: https://zoon.ru/tomsk/restaurants/
+Стр. 1: карточек 30, добавлено 30, всего 30
+Открыта страница 2: https://zoon.ru/tomsk/restaurants/page-2/
+Стр. 2: карточек 30, добавлено 30, всего 60
+Открыта страница 3: https://zoon.ru/tomsk/restaurants/page-3/
+Стр. 3: карточек 30, добавлено 30, всего 90

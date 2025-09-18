@@ -19,39 +19,25 @@
 Итог: сохраняем финальные CSV/LOG.
 """
 
+from __future__ import annotations
+
+import random
 import re
 import time
-import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 
-# ------------------ НАСТРОЙКИ ------------------
-CITY_URL     = "https://zoon.ru/tomsk/restaurants/"
-TOTAL_PAGES  = 34                  # обходим страницы 1..34
-HEADLESS     = False               # окно видно — можно вручную пройти проверку при необходимости
-
-OUT_DIR      = Path.cwd() / "zoon_out"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-CSV_PATH     = OUT_DIR / "zoon_tomsk_restaurants.csv"
-LOG_PATH     = OUT_DIR / "zoon_loader_log.txt"
-
-USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-
-
-# ------------------ МОДЕЛЬ ------------------
+# ------------------ МОДЕЛИ ДАННЫХ ------------------
 @dataclass
 class Place:
     name: str
@@ -59,217 +45,359 @@ class Place:
     categories: List[str]
 
 
-# ------------------ ВСПОМОГАТЕЛЬНОЕ ------------------
-def human_sleep(a=2.0, b=4.2) -> None:
-    """Случайная пауза: имитируем «живого» пользователя и даём странице дорисоваться."""
+@dataclass
+class ParserConfig:
+    city_url: str = "https://zoon.ru/tomsk/restaurants/"
+    total_pages: int = 34
+    headless: bool = False
+    user_agents: Tuple[str, ...] = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/118.0.5993.90 Safari/537.36",
+    )
+    accept_language: str = "ru-RU,ru;q=0.9,en-US;q=0.8"
+    out_dir: Path = field(default_factory=lambda: Path.cwd() / "zoon_out")
+    csv_filename: str = "zoon_tomsk_restaurants.csv"
+    log_filename: str = "zoon_loader_log.txt"
+    wait_timeout: int = 25
+    initial_sleep: Tuple[float, float] = (1.5, 3.0)
+    page_sleep: Tuple[float, float] = (2.8, 5.2)
+    scroll_sleep: Tuple[float, float] = (0.6, 1.2)
+    scroll_reset_sleep: Tuple[float, float] = (0.5, 1.1)
+    scroll_steps_range: Tuple[int, int] = (4, 7)
+    protect_poll_attempts: int = 10
+    protect_poll_delay: Tuple[float, float] = (2.2, 4.2)
+    protect_manual_retry_attempts: int = 6
+    protect_manual_retry_delay: Tuple[float, float] = (3.5, 5.5)
+    window_width_range: Tuple[int, int] = (1280, 1680)
+    window_height_range: Tuple[int, int] = (820, 1050)
+
+    def __post_init__(self) -> None:
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+
+    def page_url(self, page: int) -> str:
+        return self.city_url if page == 1 else f"{self.city_url.rstrip('/')}/page-{page}/"
+
+    def choose_user_agent(self) -> str:
+        return random.choice(self.user_agents)
+
+    def random_window_size(self) -> Tuple[int, int]:
+        width = random.randint(*self.window_width_range)
+        height = random.randint(*self.window_height_range)
+        return width, height
+
+    @property
+    def csv_path(self) -> Path:
+        return self.out_dir / self.csv_filename
+
+    @property
+    def log_path(self) -> Path:
+        return self.out_dir / self.log_filename
+
+
+# ------------------ УТИЛИТЫ ------------------
+def humanized_sleep(bounds: Tuple[float, float]) -> None:
+    """Случайная пауза в заданном диапазоне."""
+    a, b = bounds
     time.sleep(random.uniform(a, b))
 
 
-def page_url(n: int) -> str:
-    """URL страницы n (1 → базовая ссылка)."""
-    return CITY_URL if n == 1 else f"{CITY_URL.rstrip('/')}/page-{n}/"
+def df_from_places(places: Iterable[Place]) -> pd.DataFrame:
+    """Конвертация списка мест в DataFrame для сохранения."""
+    rows = [{
+        "Название": p.name,
+        "Рейтинг": p.rating if p.rating is not None else "",
+        "Направления": " | ".join(p.categories) if p.categories else "",
+    } for p in places]
+    return pd.DataFrame(rows)
 
 
-def build_driver() -> webdriver.Chrome:
-    """Инициализация Chrome WebDriver."""
-    opts = Options()
-    if HEADLESS:
-        opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--start-maximized")
-    opts.add_argument("--lang=ru-RU")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_argument(f"--user-agent={USER_AGENT}")
-
-    driver = webdriver.Chrome(options=opts)
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument",
-        {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"}
-    )
-    return driver
-
-
-def is_protect_screen(driver: webdriver.Chrome) -> bool:
-    """Детект экрана проверки («вы не робот») по текстовым признакам в HTML."""
-    html = driver.page_source.lower()
-    keys = [
+# ------------------ ОСНОВНАЯ ЛОГИКА ------------------
+class ZoonScraper:
+    PROTECT_TOKENS: Sequence[str] = (
         "мы проверяем, что вы не робот",
         "checking your browser",
         "you will be redirected",
         "cloudflare",
         "подождите несколько секунд",
-    ]
-    return any(k in html for k in keys)
+    )
+    CARD_SELECTORS: Sequence[str] = (
+        "li.minicard-item.js-results-item",
+        "div.minicard-item",
+    )
+    FEATURES_SELECTOR = ".minicard-item__features a, .service-items a, .tags a"
+    TITLE_SELECTORS: Sequence[str] = (
+        "a.title-link.js-item-url",
+        ".minicard-item__title",
+        "h2",
+    )
+    RATING_SELECTOR = ".minicard-item__rating, .rating, .stars"
 
+    def __init__(self, config: ParserConfig) -> None:
+        self.config = config
+        self.places: List[Place] = []
+        self.logs: List[str] = []
+        self._driver: Optional[webdriver.Chrome] = None
+        self._user_agent: str = self.config.choose_user_agent()
 
-def wait_cards_container(driver: webdriver.Chrome, timeout: int = 25) -> None:
-    """Явное ожидание контейнера списка карточек."""
-    candidates = [
-        (By.CSS_SELECTOR, "ul.js-results-group"),
-        (By.CSS_SELECTOR, "div.catalog-list"),
-        (By.CSS_SELECTOR, "div.results-container"),
-    ]
-    last_error = None
-    for by, sel in candidates:
+    # ---------- Публичный интерфейс ----------
+    def run(self) -> Tuple[List[Place], List[str]]:
+        driver = self._ensure_driver()
         try:
-            WebDriverWait(driver, timeout).until(EC.presence_of_element_located((by, sel)))
+            for page in range(1, self.config.total_pages + 1):
+                if not self._process_page(page, driver):
+                    break
+        finally:
+            self.close()
+        return self.places, self.logs
+
+    def close(self) -> None:
+        if self._driver is None:
             return
-        except TimeoutException as e:
-            last_error = e
-    raise last_error or TimeoutException("Контейнер списка не найден.")
-
-
-def gentle_scroll(driver: webdriver.Chrome) -> None:
-    """Короткая «человеческая» прокрутка для дорисовки элементов."""
-    h = driver.execute_script("return document.body.scrollHeight") or 1000
-    steps = random.randint(3, 5)
-    for i in range(steps):
-        y = int(h * (i + 1) / (steps + 1))
-        driver.execute_script(f"window.scrollTo({{top:{y}, behavior:'smooth'}});")
-        time.sleep(random.uniform(0.5, 1.0))
-    driver.execute_script("window.scrollTo({top:0, behavior:'smooth'});")
-    time.sleep(random.uniform(0.4, 0.8))
-
-
-def collect_cards(driver: webdriver.Chrome):
-    """Возвращаем WebElement-ы карточек на текущей странице."""
-    for sel in ("li.minicard-item.js-results-item", "div.minicard-item"):
-        items = driver.find_elements(By.CSS_SELECTOR, sel)
-        if items:
-            return items
-    return []
-
-
-def parse_card(card) -> Place:
-    """Извлекаем из карточки: название, рейтинг, направления."""
-    try:
-        name = card.find_element(By.CSS_SELECTOR, "a.title-link.js-item-url").text.strip()
-    except NoSuchElementException:
         try:
-            name = card.find_element(By.CSS_SELECTOR, ".minicard-item__title, h2").text.strip()
+            self._driver.quit()
         except Exception:
-            name = ""
+            pass
+        finally:
+            self._driver = None
 
-    rating = None
-    try:
-        t = card.find_element(By.CSS_SELECTOR, ".minicard-item__rating, .rating, .stars").text.strip()
-        m = re.search(r"(\d+[.,]\d+|\d+)", t)
-        if m:
-            rating = float(m.group(1).replace(",", "."))
-    except NoSuchElementException:
-        pass
+    # ---------- Внутренняя механика ----------
+    def _ensure_driver(self) -> webdriver.Chrome:
+        if self._driver is None:
+            self._driver = self._build_driver()
+        return self._driver
 
-    cats, seen = [], set()
-    try:
-        for a in card.find_elements(By.CSS_SELECTOR, ".minicard-item__features a, .service-items a, .tags a"):
-            txt = a.text.strip(" ·—-\n\t")
-            if txt and txt not in seen:
-                seen.add(txt)
-                cats.append(txt)
-    except NoSuchElementException:
-        pass
+    def _build_driver(self) -> webdriver.Chrome:
+        opts = Options()
+        if self.config.headless:
+            opts.add_argument("--headless=new")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-gpu")
+        opts.add_argument("--lang=ru-RU")
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+        opts.add_experimental_option("useAutomationExtension", False)
+        width, height = self.config.random_window_size()
+        opts.add_argument(f"--window-size={width},{height}")
+        opts.add_argument(f"--user-agent={self._user_agent}")
 
-    return Place(name=name, rating=rating, categories=cats)
+        driver = webdriver.Chrome(options=opts)
+        driver.execute_cdp_cmd(
+            "Network.setUserAgentOverride",
+            {
+                "userAgent": self._user_agent,
+                "acceptLanguage": self.config.accept_language,
+                "platform": "Win32",
+            },
+        )
+        driver.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": self._detector_evasion_script()},
+        )
+        return driver
 
+    def _detector_evasion_script(self) -> str:
+        # Скрываем признаки Selenium, встречающиеся в публичных антибот-чеках Cloudflare.
+        return (
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});\n"
+            "Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});\n"
+            "Object.defineProperty(navigator, 'language', {get: () => 'ru-RU'});\n"
+            "Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU','ru','en-US']});\n"
+            "Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3]});\n"
+            "Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});\n"
+            "const getParameter = WebGLRenderingContext.prototype.getParameter;\n"
+            "WebGLRenderingContext.prototype.getParameter = function(parameter) {\n"
+            "  if (parameter === 37445) {return 'Intel Inc.';};\n"
+            "  if (parameter === 37446) {return 'Intel Iris OpenGL Engine';};\n"
+            "  return getParameter.call(this, parameter);\n"
+            "};\n"
+        )
 
-def df_from_places(places: List[Place]) -> pd.DataFrame:
-    """Удобный конвертер в DataFrame."""
-    rows = [{
-        "Название": p.name,
-        "Рейтинг": p.rating if p.rating is not None else "",
-        "Направления": " | ".join(p.categories) if p.categories else ""
-    } for p in places]
-    return pd.DataFrame(rows)
+    def _process_page(self, page: int, driver: webdriver.Chrome) -> bool:
+        url = self.config.page_url(page)
+        print(f"[ШАГ] Открываем страницу {page}: {url}")
+        self.logs.append(f"Открыта страница {page}: {url}")
 
+        driver.get(url)
+        humanized_sleep(self.config.initial_sleep)
 
-def save_partial(places: List[Place], logs: List[str], suffix: str) -> None:
-    """Автосохранение после каждой страницы."""
-    csv_path = OUT_DIR / f"zoon_tomsk_restaurants_page_{suffix}.csv"
-    log_path = OUT_DIR / f"zoon_loader_log_page_{suffix}.txt"
-    df_from_places(places).to_csv(csv_path, index=False, encoding="utf-8-sig")
-    Path(log_path).write_text("\n".join(logs), encoding="utf-8")
-    print(f"  [autosave] CSV: {csv_path.name} | LOG: {log_path.name} | строк: {len(places)}")
+        if not self._handle_protect_screen(page, driver):
+            return False
 
+        if not self._wait_cards_container(driver, page):
+            return False
 
-# ------------------ ОСНОВНОЙ ЦИКЛ ------------------
-def scrape_all_pages():
-    driver = build_driver()
-    places: List[Place] = []
-    logs: List[str] = []
+        self._gentle_scroll(driver)
 
-    try:
-        for page in range(1, TOTAL_PAGES + 1):
-            url = page_url(page)
-            print(f"[ШАГ] Открываем страницу {page}: {url}")
-            logs.append(f"Открыта страница {page}: {url}")
-            driver.get(url)
-            human_sleep(1.5, 3.0)
+        cards = self._collect_cards(driver)
+        if not cards:
+            self.logs.append(f"Стр. {page}: карточек нет — стоп")
+            print("  ↳ Карточек нет — стоп.")
+            return False
 
-            if is_protect_screen(driver):
-                logs.append(f"Стр. {page}: экран проверки — ждём редирект")
-                print("  ↳ Обнаружена проверка. Ждём авто-редирект…")
-                ok = False
-                for _ in range(8):
-                    time.sleep(2.5)
-                    if not is_protect_screen(driver):
-                        ok = True
-                        break
-                if not ok and not HEADLESS:
-                    logs.append(f"Стр. {page}: ручное подтверждение пользователя")
-                    print("  ↳ Пройдите проверку в окне браузера и нажмите Enter в терминале…")
-                    try:
-                        input()
-                    except Exception:
-                        pass
+        added = self._append_cards(cards)
+        self.logs.append(
+            f"Стр. {page}: карточек {len(cards)}, добавлено {added}, всего {len(self.places)}"
+        )
+        print(f"  ↳ Найдено {len(cards)}; добавлено {added}; всего {len(self.places)}")
 
-            try:
-                wait_cards_container(driver, timeout=25)
-            except TimeoutException:
-                logs.append(f"Стр. {page}: контейнер не найден — стоп")
-                print("  ↳ Контейнер не найден — стоп.")
-                break
+        self._save_partial(page)
+        humanized_sleep(self.config.page_sleep)
+        return True
 
-            gentle_scroll(driver)
+    def _handle_protect_screen(self, page: int, driver: webdriver.Chrome) -> bool:
+        if not self._is_protect_screen(driver):
+            return True
 
-            cards = collect_cards(driver)
-            if not cards:
-                logs.append(f"Стр. {page}: карточек нет — стоп")
-                print("  ↳ Карточек нет — стоп.")
-                break
+        self.logs.append(f"Стр. {page}: экран проверки — ждём редирект")
+        print("  ↳ Обнаружена проверка. Ждём авто-редирект…")
+        for _ in range(self.config.protect_poll_attempts):
+            humanized_sleep(self.config.protect_poll_delay)
+            if not self._is_protect_screen(driver):
+                return True
 
-            before = len(places)
-            for c in cards:
-                p = parse_card(c)
-                if p.name:
-                    places.append(p)
-            added = len(places) - before
+        if self.config.headless:
+            self.logs.append(f"Стр. {page}: проверка не пройдена — стоп")
+            print("  ↳ Проверка не пройдена — стоп.")
+            return False
 
-            logs.append(f"Стр. {page}: карточек {len(cards)}, добавлено {added}, всего {len(places)}")
-            print(f"  ↳ Найдено {len(cards)}; добавлено {added}; всего {len(places)}")
-
-            save_partial(places, logs, suffix=f"{page:02d}")
-
-            human_sleep(2.4, 4.8)
-
-    finally:
+        self.logs.append(f"Стр. {page}: ручное подтверждение пользователя")
+        print("  ↳ Пройдите проверку в окне браузера и нажмите Enter в терминале…")
         try:
-            driver.quit()
+            input()
         except Exception:
             pass
 
-    return places, logs
+        for _ in range(self.config.protect_manual_retry_attempts):
+            humanized_sleep(self.config.protect_manual_retry_delay)
+            if not self._is_protect_screen(driver):
+                return True
+            driver.refresh()
+
+        self.logs.append(
+            f"Стр. {page}: проверка не пройдена после ручного подтверждения — стоп"
+        )
+        print("  ↳ Проверка не пройдена — стоп.")
+        return False
+
+    def _is_protect_screen(self, driver: webdriver.Chrome) -> bool:
+        html = driver.page_source.lower()
+        return any(token in html for token in self.PROTECT_TOKENS)
+
+    def _wait_cards_container(self, driver: webdriver.Chrome, page: int) -> bool:
+        candidates = (
+            (By.CSS_SELECTOR, "ul.js-results-group"),
+            (By.CSS_SELECTOR, "div.catalog-list"),
+            (By.CSS_SELECTOR, "div.results-container"),
+        )
+        for by, selector in candidates:
+            try:
+                WebDriverWait(driver, self.config.wait_timeout).until(
+                    EC.presence_of_element_located((by, selector))
+                )
+                return True
+            except TimeoutException:
+                continue
+        self.logs.append(f"Стр. {page}: контейнер не найден — стоп")
+        print("  ↳ Контейнер не найден — стоп.")
+        return False
+
+    def _gentle_scroll(self, driver: webdriver.Chrome) -> None:
+        height = driver.execute_script("return document.body.scrollHeight") or 1000
+        steps = random.randint(*self.config.scroll_steps_range)
+        for idx in range(steps):
+            y = int(height * (idx + 1) / (steps + 1))
+            driver.execute_script(f"window.scrollTo({{top:{y}, behavior:'smooth'}});")
+            humanized_sleep(self.config.scroll_sleep)
+        driver.execute_script("window.scrollTo({top:0, behavior:'smooth'});")
+        humanized_sleep(self.config.scroll_reset_sleep)
+
+    def _collect_cards(self, driver: webdriver.Chrome):
+        for selector in self.CARD_SELECTORS:
+            items = driver.find_elements(By.CSS_SELECTOR, selector)
+            if items:
+                return items
+        return []
+
+    def _append_cards(self, cards) -> int:
+        before = len(self.places)
+        for card in cards:
+            place = self._parse_card(card)
+            if place.name:
+                self.places.append(place)
+        return len(self.places) - before
+
+    def _parse_card(self, card) -> Place:
+        name = self._extract_name(card)
+        rating = self._extract_rating(card)
+        categories = self._extract_categories(card)
+        return Place(name=name, rating=rating, categories=categories)
+
+    def _extract_name(self, card) -> str:
+        for selector in self.TITLE_SELECTORS:
+            try:
+                text = card.find_element(By.CSS_SELECTOR, selector).text.strip()
+                if text:
+                    return text
+            except NoSuchElementException:
+                continue
+        return ""
+
+    def _extract_rating(self, card) -> Optional[float]:
+        try:
+            text = card.find_element(By.CSS_SELECTOR, self.RATING_SELECTOR).text.strip()
+        except NoSuchElementException:
+            return None
+        match = re.search(r"(\d+[.,]\d+|\d+)", text)
+        if not match:
+            return None
+        return float(match.group(1).replace(",", "."))
+
+    def _extract_categories(self, card) -> List[str]:
+        try:
+            links = card.find_elements(By.CSS_SELECTOR, self.FEATURES_SELECTOR)
+        except NoSuchElementException:
+            return []
+        categories: List[str] = []
+        seen = set()
+        for link in links:
+            text = link.text.strip(" ·—-\n\t")
+            if text and text not in seen:
+                seen.add(text)
+                categories.append(text)
+        return categories
+
+    def _save_partial(self, page: int) -> None:
+        suffix = f"{page:02d}"
+        csv_path = self.config.out_dir / f"zoon_tomsk_restaurants_page_{suffix}.csv"
+        log_path = self.config.out_dir / f"zoon_loader_log_page_{suffix}.txt"
+        df_from_places(self.places).to_csv(csv_path, index=False, encoding="utf-8-sig")
+        log_path.write_text("\n".join(self.logs), encoding="utf-8")
+        print(
+            "  [autosave] "
+            f"CSV: {csv_path.name} | LOG: {log_path.name} | строк: {len(self.places)}"
+        )
 
 
 # ------------------ ТОЧКА ВХОДА ------------------
-if __name__ == "__main__":
+def main() -> None:
     print("[СТАРТ] Учебный парсер ZOON (Томск) — строгая пагинация 1..34")
-    data, history = scrape_all_pages()
+    config = ParserConfig()
+    scraper = ZoonScraper(config)
+    places, history = scraper.run()
 
-    df = df_from_places(data)
-    df.to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
-    Path(LOG_PATH).write_text("\n".join(history), encoding="utf-8")
+    df = df_from_places(places)
+    df.to_csv(config.csv_path, index=False, encoding="utf-8-sig")
+    config.log_path.write_text("\n".join(history), encoding="utf-8")
 
-    print(f"\n[ГОТОВО] CSV: {CSV_PATH} | строк: {len(df)}")
-    print(f"[ГОТОВО] LOG: {LOG_PATH}")
+    print(f"\n[ГОТОВО] CSV: {config.csv_path} | строк: {len(df)}")
+    print(f"[ГОТОВО] LOG: {config.log_path}")
     print("[ФИНИШ] Завершено.")
+
+
+if __name__ == "__main__":
+    main()
