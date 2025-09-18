@@ -63,3 +63,6 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+
+.mypy_cache/
+.ruff_cache/
